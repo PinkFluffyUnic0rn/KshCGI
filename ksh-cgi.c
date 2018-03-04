@@ -8,60 +8,14 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <linux/limits.h>
+#include <stdarg.h>
 
+#include "common.h"
+#include "dstring.h"
 #include "messageheader.h"
 
-// TODO make a config file
-char fifopath[PATH_MAX];
-#define MAX_TEMP_FILES 32
-char tmpfiles[MAX_TEMP_FILES][PATH_MAX];
-
+// extern
 int tmpfilescount = 0;
-
-void cleanup()
-{
-	int i;
-
-	unlink(fifopath);
-
-	for (i = 0; i < tmpfilescount; ++i)
-		unlink(tmpfiles[i]);
-}
-
-// TODO explain errors in status field
-void exitwithstatus(int status)
-{
-	cleanup();
-	
-	printf("Status: %d\r\n\r\n", status);
-	fflush(stdout);
-
-	exit(1);
-}
-
-void *xrealloc(void *ptr, size_t size)
-{
-	void *p;
-
-	if ((p = realloc(ptr, size)) == NULL)
-		exitwithstatus(500);
-
-	return p;
-}
-
-// TODO maybe should use buffered I/O from stdlib
-void writedata(int fd, char *data, size_t len)
-{
-	ssize_t w, ww;
-
-	w = 0;
-	while ((ww = write(fd, data + w, len - w)) != 0) {
-		if (ww < 0)
-			exitwithstatus(500);
-		
-		w += ww;
-	}
-}
 
 char percentdecode(const char *e)
 {
@@ -146,62 +100,6 @@ int urldecode(char *s, char **attr, char **value)
 	return 0;
 }
 
-struct dstring {
-	char *str;
-	size_t sz;
-	size_t maxsz;
-};
-
-void dstringinit(struct dstring *s)
-{
-	s->str = xrealloc(NULL, 1);
-
-	s->str[0] = '\0';
-	s->sz = 1;
-	s->maxsz = 1;
-}
-
-void dstringncat(struct dstring *s, const char *c, size_t l)
-{
-	if (s->sz + l >= s->maxsz) {
-		s->maxsz = (s->sz + l) * 2;
-		s->str = xrealloc(s->str, s->maxsz);
-	}
-
-	strncat(s->str, c, l);
-	s->sz += l;
-}
-
-void dstringcat(struct dstring *s, const char *c)
-{
-	dstringncat(s, c, strlen(c));
-}
-
-void dstringqncat(struct dstring *s, char *c, size_t sz)
-{
-	char *b, *e;
-
-	b = c;
-	while ((e = memchr(b, '\'', b + sz - b)) != NULL) {
-		dstringncat(s, b, e - b);
-		dstringcat(s, "'\"'\"'");
-		b = e + 1;
-	}
-
-	dstringncat(s, b, c + sz - b);
-}
-
-void dstringqcat(struct dstring *s, char *c)
-{
-	dstringqncat(s, c, strlen(c));
-}
-
-void dstringdestroy(struct dstring *s)
-{
-	free(s->str);
-	s->str = NULL;
-}
-
 void urlencodedforms(char *forms, int fifofd)
 {
 	struct dstring tmpstr;
@@ -209,13 +107,11 @@ void urlencodedforms(char *forms, int fifofd)
 	
 	dstringinit(&tmpstr);
 	
-	dstringcat(&tmpstr, "typeset -A formdata;\n\n");
+	dstringcat(&tmpstr, "typeset -A formdata;\n\n", NULL);
 	while (urldecode(forms, &attr, &val) >= 0) {
-		dstringcat(&tmpstr, "formdata[");
-		dstringcat(&tmpstr, attr);
-		dstringcat(&tmpstr, "]='");
+		dstringcat(&tmpstr, "formdata[", attr, "]='", NULL);
 		dstringqcat(&tmpstr, val);
-		dstringcat(&tmpstr, "';\n");
+		dstringcat(&tmpstr, "';\n", NULL);
 		
 		forms = NULL;
 	}
@@ -270,8 +166,8 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 	int r;
 
 	dstringinit(&tmpstr);
-	dstringcat(&tmpstr, "typeset -A formdata;\n");
-	dstringcat(&tmpstr, "typeset -A filename;\n\n");
+	dstringcat(&tmpstr,
+		"typeset -A formdata;\ntypeset -A filename;\n\n", NULL);
 	
 	bnd = malloc(strlen("--\r\n") + strlen(boundary) + 1);
 	sprintf(bnd, "--%s", boundary);
@@ -304,9 +200,8 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 			char *bp;
 			
 			//TODO can be ' in formname?
-			dstringcat(&tmpstr, "formdata[");
-			dstringcat(&tmpstr, hdr.formname);
-			dstringcat(&tmpstr, "]='");
+			dstringcat(&tmpstr,
+				"formdata[", hdr.formname, "]='", NULL);
 			
 			bp = bnd;
 			while (*bp != '\0') {
@@ -326,7 +221,7 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 				}
 			}
 
-			dstringcat(&tmpstr, "';\n");
+			dstringcat(&tmpstr, "';\n", NULL);
 		}
 		else {
 			FILE *tmpfile;
@@ -360,37 +255,33 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 
 			fclose(tmpfile);
 
-
-			dstringcat(&tmpstr, "formdata[");
-			dstringcat(&tmpstr, hdr.formname);
-			dstringcat(&tmpstr, "]='");
+			dstringcat(&tmpstr,
+				"formdata[", hdr.formname, "]='", NULL);	
 			dstringqcat(&tmpstr, tmpfiles[tmpfilescount]);
-			dstringcat(&tmpstr, "';\n");
+			dstringcat(&tmpstr, "';\n", NULL);
 	
-			if (hdr.filename != NULL) {	
-				dstringcat(&tmpstr, "filename[");
-				dstringcat(&tmpstr, hdr.formname);
-				dstringcat(&tmpstr, "]='");
+			if (hdr.filename != NULL) {
+				dstringcat(&tmpstr,
+					"filename[", hdr.formname, "]='", NULL);
 				dstringqcat(&tmpstr, hdr.filename);
-				dstringcat(&tmpstr, "';\n");
+				dstringcat(&tmpstr, "';\n", NULL);
 			}
 			
 			++tmpfilescount;
 		}
 
 		e[0]=getc(stdin);
-		while ((e[1] = getc(stdin)) > 0
+		while ((e[1] = getc(stdin)) != EOF
 			&& strncmp(e, "\r\n", 2) != 0
 			&& strncmp(e, "--", 2) != 0)
 			e[0] = e[1];
 	
-		if (e[1] < 0)
+		if (e[1] == EOF)
 			exitwithstatus(400);
 
 		if (strncmp(e, "--", 2) == 0)
 			break;
 	}
-
 	
 	writedata(fifofd, tmpstr.str, strlen(tmpstr.str));
 	dstringdestroy(&tmpstr);
