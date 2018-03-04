@@ -11,8 +11,6 @@ struct dstring {
 
 void dstringinit(struct dstring *s);
 
-void dstringncat(struct dstring *s, const char *c, size_t l);
-
 void dstringcat(struct dstring *s, const char *c, ...);
 
 void dstringqncat(struct dstring *s, char *c, size_t sz);

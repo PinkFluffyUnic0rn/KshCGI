@@ -24,7 +24,7 @@ void dstringinit(struct dstring *s)
 	s->maxsz = 1;
 }
 
-void dstringncat(struct dstring *s, const char *c, size_t l)
+static void dstringncat(struct dstring *s, const char *c, size_t l)
 {
 	if (s->sz + l >= s->maxsz) {
 		s->maxsz = (s->sz + l) * 2;
