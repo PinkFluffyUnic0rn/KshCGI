@@ -169,7 +169,7 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 	dstringcat(&tmpstr,
 		"typeset -A formdata;\ntypeset -A filename;\n\n", NULL);
 	
-	bnd = malloc(strlen("--\r\n") + strlen(boundary) + 1);
+	bnd = xrealloc(NULL, strlen("--\r\n") + strlen(boundary) + 1);
 	sprintf(bnd, "--%s", boundary);
 	bndlen = strlen(bnd);
 	
@@ -215,9 +215,14 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 					cc = c;
 				
 					dstringqncat(&tmpstr, bnd, bp - bnd);
-					dstringqncat(&tmpstr, &cc, 1);
 					
 					bp = bnd;
+					if (c == *bp) {
+						++bp;
+						continue;
+					}
+
+					dstringqncat(&tmpstr, &cc, 1);
 				}
 			}
 
@@ -248,11 +253,17 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 					++bp;
 				else {
 					fwrite(bnd, bp - bnd, 1, tmpfile);
+				
 					bp = bnd;
+					if (c == *bp) {
+						++bp;
+						continue;
+					}	
+						
 					putc(c, tmpfile);
 				}
 			}
-
+			
 			fclose(tmpfile);
 
 			dstringcat(&tmpstr,
@@ -270,6 +281,11 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 			++tmpfilescount;
 		}
 
+		if (hdr.disptype != NULL)
+			free(hdr.disptype);
+		if (hdr.conttype != NULL)
+			free(hdr.conttype);
+
 		e[0]=getc(stdin);
 		while ((e[1] = getc(stdin)) != EOF
 			&& strncmp(e, "\r\n", 2) != 0
@@ -285,9 +301,6 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 	
 	writedata(fifofd, tmpstr.str, strlen(tmpstr.str));
 	dstringdestroy(&tmpstr);
-
-
-	// TODO free header data
 
 	free(bnd);
 }
@@ -309,7 +322,7 @@ void postmethod(int fifofd)
 		char *body, *p;
 		int r;
 
-		if ((body = malloc(contlen)) == NULL)
+		if ((body = xrealloc(NULL, contlen)) == NULL)
 			exitwithstatus(500);
 
 		p = body;

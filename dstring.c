@@ -5,16 +5,6 @@
 #include "common.h"
 #include "dstring.h"
 
-static void *xrealloc(void *ptr, size_t size)
-{
-	void *p;
-
-	if ((p = realloc(ptr, size)) == NULL)
-		exitwithstatus(500);
-
-	return p;
-}
-
 void dstringinit(struct dstring *s)
 {
 	s->str = xrealloc(NULL, 1);

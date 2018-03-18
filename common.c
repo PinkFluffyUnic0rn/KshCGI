@@ -39,3 +39,13 @@ void writedata(int fd, char *data, size_t len)
 		w += ww;
 	}
 }
+
+void *xrealloc(void *ptr, size_t size)
+{
+	void *p;
+
+	if ((p = realloc(ptr, size)) == NULL)
+		exitwithstatus(500);
+
+	return p;
+}

@@ -3,6 +3,7 @@
 #include <stdio.h>
 
 #include "messageheader.h"
+#include "common.h"
 
 int mh_errcode = MH_SUCCESS;
 
@@ -39,7 +40,7 @@ static char *mh_gettoken(const char *s)
 
 	if (s != NULL) {
 		ss = s;
-		t = malloc(2 * strlen(s) + 1);
+		t = xrealloc(NULL, 2 * strlen(s) + 1);
 	}
 	
 	prevt = t;
