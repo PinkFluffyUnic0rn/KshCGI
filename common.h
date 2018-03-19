@@ -15,8 +15,6 @@ void cleanup();
 
 void exitwithstatus(int status);
 
-void writedata(int fd, char *data, size_t len);
-
 void *xrealloc(void *ptr, size_t size);
 
 #endif

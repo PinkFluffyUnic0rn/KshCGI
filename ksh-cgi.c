@@ -14,6 +14,9 @@
 #include "dstring.h"
 #include "messageheader.h"
 
+//TODO since buffered io is used, there
+// is should be a way to not use dynamic strings
+
 // extern
 int tmpfilescount = 0;
 
@@ -100,7 +103,7 @@ int urldecode(char *s, char **attr, char **value)
 	return 0;
 }
 
-void urlencodedforms(char *forms, int fifofd)
+void urlencodedforms(char *forms, FILE *fifofile)
 {
 	struct dstring tmpstr;
 	char *attr, *val;
@@ -116,7 +119,7 @@ void urlencodedforms(char *forms, int fifofd)
 		forms = NULL;
 	}
 
-	writedata(fifofd, tmpstr.str, strlen(tmpstr.str));
+	fwrite(tmpstr.str, 1, strlen(tmpstr.str), fifofile);
 }
 
 struct partheader {
@@ -143,10 +146,9 @@ void multipartheader(struct partheader *hdr)
 			hdr->disptype = mh_getdisptype(body);
 		
 			while ((name = mh_getparam(&val)) != NULL) {
-				// TODO are parameter names case sensetive?
-				if (strcmp(name, "name") == 0)
+				if (strcasecmp(name, "name") == 0)
 					hdr->formname = val;
-				else if (strcmp(name, "filename") == 0)
+				else if (strcasecmp(name, "filename") == 0)
 					hdr->filename = val;
 			}	
 		}
@@ -155,7 +157,7 @@ void multipartheader(struct partheader *hdr)
 	}
 }
 
-void multipartdata(int fifofd, char *boundary, size_t contlen)
+void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 {
 	char *s;
 	size_t ssz;
@@ -298,13 +300,13 @@ void multipartdata(int fifofd, char *boundary, size_t contlen)
 		if (strncmp(e, "--", 2) == 0)
 			break;
 	}
-	
-	writedata(fifofd, tmpstr.str, strlen(tmpstr.str));
+
+	fwrite(tmpstr.str, 1, strlen(tmpstr.str), fifofile);
 	dstringdestroy(&tmpstr);
 
 	free(bnd);
 }
-void postmethod(int fifofd)
+void postmethod(FILE *fifofile)
 {
 	char *type;
 	char *endptr;
@@ -333,7 +335,7 @@ void postmethod(int fifofd)
 			p += r;
 		}
 
-		urlencodedforms(body, fifofd);
+		urlencodedforms(body, fifofile);
 		
 		free(body);
 	} else if (strcasecmp(type, "multipart/form-data") == 0) {
@@ -344,7 +346,7 @@ void postmethod(int fifofd)
 			if (strcasecmp(name, "boundary") == 0)
 				boundary = val;
 	
-		multipartdata(fifofd, boundary, contlen);
+		multipartdata(fifofile, boundary, contlen);
 	}
 	else
 		exitwithstatus(501);
@@ -354,22 +356,29 @@ void postmethod(int fifofd)
 
 int main(int argc, char *argv[], char *envp[])
 {
-	int fifofd;
-	int scriptfd;
+	FILE *fifofile;
+	FILE *scriptfile;
 	int cpid;
 	char buf[4096];
 	int status;
 	int r;
+	
+	// writing header
+	if (fprintf(stdout, "Content-Type: text/html; charset=utf-8\r\n\r\n")
+		< 0)
+		exitwithstatus(500);
+	if (fflush(stdout) < 0)
+		exitwithstatus(500);
 
-	writedata(1, "Content-Type: text/html; charset=utf-8\r\n\r\n",
-		strlen("Content-Type: text/html; charset=utf-8\r\n\r\n"));
-
+	// making fifo for translating script
+	// with initilized form values to ksh
 	if (sprintf(fifopath, "/tmp/ksh-cgi_%d.fifo", (int) getpid()) < 0)
 		exitwithstatus(500);
 
 	if (mkfifo(fifopath, S_IRWXU) < 0)
 		exitwithstatus(500);
 	
+	// run ksh
 	if ((cpid = fork()) == 0) {
 		argv[0] = "/bin/ksh";
 		argv[1] = fifopath;
@@ -378,8 +387,8 @@ int main(int argc, char *argv[], char *envp[])
 		exitwithstatus(500);
 	}
 
-	//TODO try to use buffered I/O fith FIFO	
-	if ((fifofd = open(fifopath, O_WRONLY)) < 0)
+	// initilize form values and write them into fifo
+	if ((fifofile = fopen(fifopath, "w")) < 0)
 		exitwithstatus(500);
  
 	if (strcmp(getenv("REQUEST_METHOD"), "GET") == 0) {
@@ -387,23 +396,23 @@ int main(int argc, char *argv[], char *envp[])
 		// lighttpd doesn't care. Maybe there are exits another RFC.
 	
 		if (getenv("QUERY_STRING") != NULL)
-			urlencodedforms(getenv("QUERY_STRING"), fifofd);
+			urlencodedforms(getenv("QUERY_STRING"), fifofile);
 	}
 	else if (strcmp(getenv("REQUEST_METHOD"), "POST") == 0)
-		postmethod(fifofd);
+		postmethod(fifofile);
 
-	//TODO use fdopen for buffered I/O
-	if ((scriptfd = open(argv[1], O_RDONLY)) < 0)
+	if ((scriptfile = fopen(argv[1], "r")) < 0)
 		exitwithstatus(500);
  
-	while ((r = read(scriptfd, buf, sizeof(buf))) != 0) {
+	while ((r = fread(buf, 1, sizeof(buf), scriptfile)) != 0) {
 		if (r < 0)
 			exitwithstatus(500);
 
-		writedata(fifofd, buf, r);
+		fwrite(buf, 1, r, fifofile);
 	}
 
-	close(fifofd);
+	
+	fclose(fifofile);
 
 	wait(&status);
 	

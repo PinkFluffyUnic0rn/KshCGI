@@ -26,20 +26,6 @@ void exitwithstatus(int status)
 	exit(1);
 }
 
-// TODO maybe should use buffered I/O from stdlib
-void writedata(int fd, char *data, size_t len)
-{
-	ssize_t w, ww;
-
-	w = 0;
-	while ((ww = write(fd, data + w, len - w)) != 0) {
-		if (ww < 0)
-			exitwithstatus(500);
-		
-		w += ww;
-	}
-}
-
 void *xrealloc(void *ptr, size_t size)
 {
 	void *p;
