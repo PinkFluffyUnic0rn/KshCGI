@@ -11,11 +11,7 @@
 #include <stdarg.h>
 
 #include "common.h"
-#include "dstring.h"
 #include "messageheader.h"
-
-//TODO since buffered io is used, there
-// is should be a way to not use dynamic strings
 
 // extern
 int tmpfilescount = 0;
@@ -103,23 +99,49 @@ int urldecode(char *s, char **attr, char **value)
 	return 0;
 }
 
+void fprint(FILE *f, const char *s)
+{
+	size_t len;
+
+	len = strlen(s);
+
+	if (fwrite(s, 1, len, f) < len)
+		exitwithstatus(500);
+}
+
+void fprintnquoted(FILE *f, const char *s, size_t sz)
+{
+	const char *b, *e;
+
+	b = s;
+	while ((e = memchr(b, '\'', b + sz - b)) != NULL) {
+		if (fwrite(b, 1, e - b, f) < e - b)
+			exitwithstatus(500);
+
+		fprintf(f, "'\"'\"'");
+		
+		b = e + 1;
+	}
+
+	if (fwrite(b, 1, s + sz - b, f) < s + sz - b)
+		exitwithstatus(500);
+}
+
 void urlencodedforms(char *forms, FILE *fifofile)
 {
-	struct dstring tmpstr;
 	char *attr, *val;
 	
-	dstringinit(&tmpstr);
+	fprint(fifofile, "typeset -A formdata;\n\n");
 	
-	dstringcat(&tmpstr, "typeset -A formdata;\n\n", NULL);
 	while (urldecode(forms, &attr, &val) >= 0) {
-		dstringcat(&tmpstr, "formdata[", attr, "]='", NULL);
-		dstringqcat(&tmpstr, val);
-		dstringcat(&tmpstr, "';\n", NULL);
+		fprint(fifofile, "formdata[");
+		fprint(fifofile, attr);
+		fprint(fifofile, "]='");
+		fprintnquoted(fifofile, val, strlen(val));
+		fprint(fifofile, "';\n");	
 		
 		forms = NULL;
 	}
-
-	fwrite(tmpstr.str, 1, strlen(tmpstr.str), fifofile);
 }
 
 struct partheader {
@@ -161,15 +183,12 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 {
 	char *s;
 	size_t ssz;
-	struct dstring tmpstr;
 	char *bnd;
 	size_t bndlen;
 	int filen;
 	int r;
 
-	dstringinit(&tmpstr);
-	dstringcat(&tmpstr,
-		"typeset -A formdata;\ntypeset -A filename;\n\n", NULL);
+	fprint(fifofile, "typeset -A formdata;\ntypeset -A filename;\n\n");
 	
 	bnd = xrealloc(NULL, strlen("--\r\n") + strlen(boundary) + 1);
 	sprintf(bnd, "--%s", boundary);
@@ -202,8 +221,9 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 			char *bp;
 			
 			//TODO can be ' in formname?
-			dstringcat(&tmpstr,
-				"formdata[", hdr.formname, "]='", NULL);
+			fprint(fifofile, "formdata[");
+			fprint(fifofile, hdr.formname);
+			fprint(fifofile, "]='");
 			
 			bp = bnd;
 			while (*bp != '\0') {
@@ -216,7 +236,7 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 				else {
 					cc = c;
 				
-					dstringqncat(&tmpstr, bnd, bp - bnd);
+					fprintnquoted(fifofile, bnd, bp - bnd);
 					
 					bp = bnd;
 					if (c == *bp) {
@@ -224,17 +244,20 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 						continue;
 					}
 
-					dstringqncat(&tmpstr, &cc, 1);
+					fprintnquoted(fifofile, &cc, 1);
 				}
 			}
-
-			dstringcat(&tmpstr, "';\n", NULL);
+			
+			fprint(fifofile, "';\n");
 		}
 		else {
 			FILE *tmpfile;
 			int tmpfilefd;
 			char *bp;
-				
+			
+			if (tmpfilescount >= MAX_TEMP_FILES)
+				exitwithstatus(500);
+
 			sprintf(tmpfiles[tmpfilescount], "/tmp/ksh-cgi_%d%d",
 				(int) getpid(), filen++);
 			
@@ -268,16 +291,20 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 			
 			fclose(tmpfile);
 
-			dstringcat(&tmpstr,
-				"formdata[", hdr.formname, "]='", NULL);	
-			dstringqcat(&tmpstr, tmpfiles[tmpfilescount]);
-			dstringcat(&tmpstr, "';\n", NULL);
+			fprint(fifofile, "formdata[");
+			fprint(fifofile, hdr.formname);
+			fprint(fifofile, "]='");
+			fprintnquoted(fifofile, tmpfiles[tmpfilescount],
+				strlen(tmpfiles[tmpfilescount]));
+			fprint(fifofile, "';\n");
 	
 			if (hdr.filename != NULL) {
-				dstringcat(&tmpstr,
-					"filename[", hdr.formname, "]='", NULL);
-				dstringqcat(&tmpstr, hdr.filename);
-				dstringcat(&tmpstr, "';\n", NULL);
+				fprint(fifofile, "filename[");
+				fprint(fifofile, hdr.formname);
+				fprint(fifofile, "]='");
+				fprintnquoted(fifofile, hdr.filename,
+					strlen(hdr.filename));
+				fprint(fifofile, "';\n");
 			}
 			
 			++tmpfilescount;
@@ -300,9 +327,6 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 		if (strncmp(e, "--", 2) == 0)
 			break;
 	}
-
-	fwrite(tmpstr.str, 1, strlen(tmpstr.str), fifofile);
-	dstringdestroy(&tmpstr);
 
 	free(bnd);
 }
@@ -364,9 +388,8 @@ int main(int argc, char *argv[], char *envp[])
 	int r;
 	
 	// writing header
-	if (fprintf(stdout, "Content-Type: text/html; charset=utf-8\r\n\r\n")
-		< 0)
-		exitwithstatus(500);
+	fprint(stdout, "Content-Type: text/html; charset=utf-8\r\n\r\n");
+	
 	if (fflush(stdout) < 0)
 		exitwithstatus(500);
 
@@ -387,10 +410,16 @@ int main(int argc, char *argv[], char *envp[])
 		exitwithstatus(500);
 	}
 
-	// initilize form values and write them into fifo
+	//TODO from now stdout isn't used
+	// maybe it is better to close it
+	// and use fifofile instead
+
+
+	// write code to initilize form values before main script
+	// for file upload form also create temporary file
 	if ((fifofile = fopen(fifopath, "w")) < 0)
 		exitwithstatus(500);
- 
+
 	if (strcmp(getenv("REQUEST_METHOD"), "GET") == 0) {
 		// RFC 3875 says that this enviroment variable MUST be set,
 		// lighttpd doesn't care. Maybe there are exits another RFC.
@@ -401,6 +430,7 @@ int main(int argc, char *argv[], char *envp[])
 	else if (strcmp(getenv("REQUEST_METHOD"), "POST") == 0)
 		postmethod(fifofile);
 
+	// write main script
 	if ((scriptfile = fopen(argv[1], "r")) < 0)
 		exitwithstatus(500);
  
@@ -410,10 +440,10 @@ int main(int argc, char *argv[], char *envp[])
 
 		fwrite(buf, 1, r, fifofile);
 	}
-
 	
 	fclose(fifofile);
 
+	// wait for ksh process to end
 	wait(&status);
 	
 	if (status != 0)

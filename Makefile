@@ -1,2 +1,2 @@
 all:
-	gcc ksh-cgi.c common.c dstring.c messageheader.c -Wall -o ksh-cgi
+	gcc ksh-cgi.c common.c messageheader.c -Wall -o ksh-cgi
