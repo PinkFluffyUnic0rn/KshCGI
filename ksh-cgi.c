@@ -80,21 +80,28 @@ int urldecode(char *s, char **attr, char **value)
 
 	if (t == NULL || *t == '\0')
 		return (-1);
-	
+
+	// find occurence of &
 	s = t;
-	while (*t != '&' && *t != '\0')
-		++t;
-	if (*t == '&')
+	t = strchr(t, '&');
+	t = (t == NULL) ? s + strlen(s) : t;
+	if (*t != '\0')	
 		*(t++) = '\0';
 
+	// find occurent of =
 	*attr = s;
-	s = strchr(s, '=');
+	if ((s = strchr(s, '=')) == NULL)
+		exitwithstatus(400);
 	*(s++) = '\0';
 	*value = s;
 
-
+	// decode name and value
 	valdecode(*attr);
 	valdecode(*value);
+
+	if (**attr == '\0')
+		exitwithstatus(400);
+
 	
 	return 0;
 }
@@ -378,21 +385,46 @@ void postmethod(FILE *fifofile)
 	free(type);
 }
 
+int outputproc()
+{
+	char *s;
+	size_t ssz;
+	char buf[4096];
+	int r;
+
+	ssz = 0;	
+	if (getline(&s, &ssz, stdin) < 0)
+		exitwithstatus(500);
+
+	if (strcmp(s, "<!DOCTYPE html>") == 0)
+		if (printf("%s\r\n\r\n", "Content-Type: text/html; charset=utf-8") < 0)
+			exitwithstatus(500);
+		
+	if (printf("%s", s) < 0)
+		exitwithstatus(500);
+	
+	// transmit other ksh output data
+	while ((r = fread(buf, 1, sizeof(buf), stdin)) != 0) {
+		if (r < 0)
+			return 1;
+
+		fwrite(buf, 1, r, stdout);
+	}
+	
+	return 0;
+}
+
 int main(int argc, char *argv[], char *envp[])
 {
 	FILE *fifofile;
 	FILE *scriptfile;
 	int cpid;
+	int oprocpid;
 	char buf[4096];
+	int p[2];
 	int status;
 	int r;
 	
-	// writing header
-	fprint(stdout, "Content-Type: text/html; charset=utf-8\r\n\r\n");
-	
-	if (fflush(stdout) < 0)
-		exitwithstatus(500);
-
 	// making fifo for translating script
 	// with initilized form values to ksh
 	if (sprintf(fifopath, "/tmp/ksh-cgi_%d.fifo", (int) getpid()) < 0)
@@ -400,20 +432,40 @@ int main(int argc, char *argv[], char *envp[])
 
 	if (mkfifo(fifopath, S_IRWXU) < 0)
 		exitwithstatus(500);
-	
+
+	// ksh output is transmited through pipe to separate
+	// process that parsing output.
+	if (pipe(p) < 0)
+		exitwithstatus(500);
+
 	// run ksh
 	if ((cpid = fork()) == 0) {
+		close(STDOUT_FILENO);
+		dup(p[1]);
+	
+		close(p[0]);
+		close(p[1]);
+
 		argv[0] = "/bin/ksh";
 		argv[1] = fifopath;
 		execve("/bin/ksh", argv, envp);
+
+		return 1;
+	}
+	
+	// run output parsing process
+	if ((oprocpid = fork()) == 0) {
+		close(STDIN_FILENO);
+		dup(p[0]);
 		
-		exitwithstatus(500);
+		close(p[0]);
+		close(p[1]);
+
+		return outputproc();
 	}
 
-	//TODO from now stdout isn't used
-	// maybe it is better to close it
-	// and use fifofile instead
-
+	close(p[0]);
+	close(p[1]);
 
 	// write code to initilize form values before main script
 	// for file upload form also create temporary file
@@ -429,7 +481,7 @@ int main(int argc, char *argv[], char *envp[])
 	}
 	else if (strcmp(getenv("REQUEST_METHOD"), "POST") == 0)
 		postmethod(fifofile);
-
+	
 	// write main script
 	if ((scriptfile = fopen(argv[1], "r")) < 0)
 		exitwithstatus(500);
@@ -442,10 +494,15 @@ int main(int argc, char *argv[], char *envp[])
 	}
 	
 	fclose(fifofile);
-
-	// wait for ksh process to end
+	
+	// wait for ksh process and output processing to end
 	wait(&status);
 	
+	if (status != 0)
+		exitwithstatus(500);
+
+	wait(&status);
+
 	if (status != 0)
 		exitwithstatus(500);
 
