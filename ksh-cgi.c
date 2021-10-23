@@ -23,7 +23,7 @@ char percentdecode(const char *e)
 	char c;
 
 	if (e[0] == '\0' || e[1] == '\0')
-		exitwithstatus(400);
+		exitwithstatus(400, "cannot decode percent encoded string");
 
 	tmp[0] = e[0];
 	tmp[1] = e[1];
@@ -32,7 +32,7 @@ char percentdecode(const char *e)
 	c = strtol(tmp, &endptr, 16);
 
 	if (errno == ERANGE || tmp != (endptr - 2))
-		exitwithstatus(400);
+		exitwithstatus(400, "cannot decode percent encoded string");
 
 	return c;
 }
@@ -65,7 +65,7 @@ void valdecode(char *s)
 			p += 2;
 		}
 		else
-			exitwithstatus(400);
+			exitwithstatus(400, "unexpected symbol in url encoded string");
 	}
 
 	*(s++) = '\0';
@@ -80,28 +80,21 @@ int urldecode(char *s, char **attr, char **value)
 
 	if (t == NULL || *t == '\0')
 		return (-1);
-
-	// find occurence of &
+	
 	s = t;
-	t = strchr(t, '&');
-	t = (t == NULL) ? s + strlen(s) : t;
-	if (*t != '\0')	
+	while (*t != '&' && *t != '\0')
+		++t;
+	if (*t == '&')
 		*(t++) = '\0';
 
-	// find occurent of =
 	*attr = s;
-	if ((s = strchr(s, '=')) == NULL)
-		exitwithstatus(400);
+	s = strchr(s, '=');
 	*(s++) = '\0';
 	*value = s;
 
-	// decode name and value
+
 	valdecode(*attr);
 	valdecode(*value);
-
-	if (**attr == '\0')
-		exitwithstatus(400);
-
 	
 	return 0;
 }
@@ -113,7 +106,7 @@ void fprint(FILE *f, const char *s)
 	len = strlen(s);
 
 	if (fwrite(s, 1, len, f) < len)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 }
 
 void fprintnquoted(FILE *f, const char *s, size_t sz)
@@ -123,7 +116,7 @@ void fprintnquoted(FILE *f, const char *s, size_t sz)
 	b = s;
 	while ((e = memchr(b, '\'', b + sz - b)) != NULL) {
 		if (fwrite(b, 1, e - b, f) < e - b)
-			exitwithstatus(500);
+			exitwithstatus(500, "");
 
 		fprintf(f, "'\"'\"'");
 		
@@ -131,13 +124,13 @@ void fprintnquoted(FILE *f, const char *s, size_t sz)
 	}
 
 	if (fwrite(b, 1, s + sz - b, f) < s + sz - b)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 }
 
 void urlencodedforms(char *forms, FILE *fifofile)
 {
 	char *attr, *val;
-	
+
 	fprint(fifofile, "typeset -A formdata;\n\n");
 	
 	while (urldecode(forms, &attr, &val) >= 0) {
@@ -167,7 +160,7 @@ void multipartheader(struct partheader *hdr)
 		char *body;
 
 		if ((body = mh_fieldbody(field)) == NULL)
-			exitwithstatus(400);
+			exitwithstatus(400, "cannot read body of multipart data");
 	
 		if (strcasecmp(field, "Content-Disposition") == 0) {
 			char *name, *val;
@@ -204,7 +197,7 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 	s = NULL;
 	do {	
 		if ((r = getline(&s, &ssz, stdin)) < 0)
-			exitwithstatus(400);
+			exitwithstatus(400, "boundary not found while reading multipart data");
 	} while (strncmp(s, bnd, bndlen) != 0);
 	
 
@@ -219,7 +212,7 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 		multipartheader(&hdr);
 
 		if (hdr.formname == NULL || hdr.disptype == NULL)
-			exitwithstatus(400);
+			exitwithstatus(400, "cannot read header of multipart data block");
 
 		// TODO can i rely on Content-Type field existance
 		// when checking source of data?
@@ -237,7 +230,7 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 				int c;
 			
 				if ((c = getc(stdin)) == EOF)
-					exitwithstatus(400);
+					exitwithstatus(400, "unexpected EOF while reading multipart data");
 				else if (c == *bp)
 					++bp;
 				else {
@@ -263,24 +256,24 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 			char *bp;
 			
 			if (tmpfilescount >= MAX_TEMP_FILES)
-				exitwithstatus(500);
+				exitwithstatus(500, "");
 
 			sprintf(tmpfiles[tmpfilescount], "/tmp/ksh-cgi_%d%d",
 				(int) getpid(), filen++);
 			
 			if ((tmpfilefd = open(tmpfiles[tmpfilescount],
 				O_CREAT | O_WRONLY | O_TRUNC, S_IRWXU)) < 0)
-				exitwithstatus(500);
+				exitwithstatus(500, "");
 
 			if ((tmpfile = fdopen(tmpfilefd, "w")) == NULL)
-				exitwithstatus(500);
+				exitwithstatus(500, "");
 
 			bp = bnd;
 			while (*bp != '\0') {
 				int c;
 			
 				if ((c = getc(stdin)) == EOF)
-					exitwithstatus(400);
+					exitwithstatus(400, "unexpected EOF while reading multipart data");
 				else if (c == *bp)
 					++bp;
 				else {
@@ -329,7 +322,7 @@ void multipartdata(FILE *fifofile, char *boundary, size_t contlen)
 			e[0] = e[1];
 	
 		if (e[1] == EOF)
-			exitwithstatus(400);
+			exitwithstatus(400, "unexpected EOF while reading multipart data");
 
 		if (strncmp(e, "--", 2) == 0)
 			break;
@@ -344,27 +337,29 @@ void postmethod(FILE *fifofile)
 	size_t contlen;
 		
 	if (getenv("CONTENT_TYPE") == NULL)
-		exitwithstatus(400);
+		exitwithstatus(400, "CONTENT_TYPE field is empty in post request");
 
 	contlen = strtol(getenv("CONTENT_LENGTH"), &endptr, 10);
 	if (errno == ERANGE || getenv("CONTENT_LEGTH") == endptr)
-		exitwithstatus(400);
+		exitwithstatus(400, "CONTENT_LENGTH field is out of range in post request");
 
 	type = mh_getcontenttype(getenv("CONTENT_TYPE"));
 	if (strcasecmp(type, "application/x-www-form-urlencoded") == 0) {
 		char *body, *p;
 		int r;
 
-		if ((body = xrealloc(NULL, contlen)) == NULL)
-			exitwithstatus(500);
+		if ((body = xrealloc(NULL, contlen + 1)) == NULL)
+			exitwithstatus(500, "");
 
 		p = body;
 		while ((r = read(0, p, contlen)) != 0) {
 			if (r < 0)
-				exitwithstatus(500);
-		
+				exitwithstatus(500, "");
+			
 			p += r;
 		}
+	
+		*p = '\0';
 
 		urlencodedforms(body, fifofile);
 		
@@ -372,7 +367,7 @@ void postmethod(FILE *fifofile)
 	} else if (strcasecmp(type, "multipart/form-data") == 0) {
 		char *name, *val;
 		char *boundary;
-
+		
 		while ((name = mh_getparam(&val)) != NULL)
 			if (strcasecmp(name, "boundary") == 0)
 				boundary = val;
@@ -380,7 +375,7 @@ void postmethod(FILE *fifofile)
 		multipartdata(fifofile, boundary, contlen);
 	}
 	else
-		exitwithstatus(501);
+		exitwithstatus(501, "");
 
 	free(type);
 }
@@ -394,14 +389,14 @@ int outputproc()
 
 	ssz = 0;	
 	if (getline(&s, &ssz, stdin) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 
 	if (strcmp(s, "<!DOCTYPE html>") == 0)
 		if (printf("%s\r\n\r\n", "Content-Type: text/html; charset=utf-8") < 0)
-			exitwithstatus(500);
+			exitwithstatus(500, "");
 		
 	if (printf("%s", s) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 	
 	// transmit other ksh output data
 	while ((r = fread(buf, 1, sizeof(buf), stdin)) != 0) {
@@ -428,15 +423,15 @@ int main(int argc, char *argv[], char *envp[])
 	// making fifo for translating script
 	// with initilized form values to ksh
 	if (sprintf(fifopath, "/tmp/ksh-cgi_%d.fifo", (int) getpid()) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 
 	if (mkfifo(fifopath, S_IRWXU) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "cannot create fifo");
 
 	// ksh output is transmited through pipe to separate
 	// process that parsing output.
 	if (pipe(p) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "cannot open pipe");
 
 	// run ksh
 	if ((cpid = fork()) == 0) {
@@ -470,7 +465,7 @@ int main(int argc, char *argv[], char *envp[])
 	// write code to initilize form values before main script
 	// for file upload form also create temporary file
 	if ((fifofile = fopen(fifopath, "w")) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "cannot create fifo");
 
 	if (strcmp(getenv("REQUEST_METHOD"), "GET") == 0) {
 		// RFC 3875 says that this enviroment variable MUST be set,
@@ -484,11 +479,11 @@ int main(int argc, char *argv[], char *envp[])
 	
 	// write main script
 	if ((scriptfile = fopen(argv[1], "r")) < 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "cannot open script file");
  
 	while ((r = fread(buf, 1, sizeof(buf), scriptfile)) != 0) {
 		if (r < 0)
-			exitwithstatus(500);
+			exitwithstatus(500, "error while reading script file");
 
 		fwrite(buf, 1, r, fifofile);
 	}
@@ -499,12 +494,12 @@ int main(int argc, char *argv[], char *envp[])
 	wait(&status);
 	
 	if (status != 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "script ended with error");
 
 	wait(&status);
 
 	if (status != 0)
-		exitwithstatus(500);
+		exitwithstatus(500, "script ended with error");
 
 	cleanup();
 

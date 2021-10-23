@@ -16,11 +16,11 @@ void cleanup()
 }
 
 // TODO explain errors in status field
-void exitwithstatus(int status)
+void exitwithstatus(int status, const char *reason)
 {
 	cleanup();
 	
-	printf("Status: %d\r\n\r\n", status);
+	printf("Status: %d %s\r\n\r\n", status, reason);
 	fflush(stdout);
 
 	exit(1);
@@ -31,7 +31,7 @@ void *xrealloc(void *ptr, size_t size)
 	void *p;
 
 	if ((p = realloc(ptr, size)) == NULL)
-		exitwithstatus(500);
+		exitwithstatus(500, "");
 
 	return p;
 }

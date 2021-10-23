@@ -13,7 +13,7 @@ extern int tmpfilescount;
 
 void cleanup();
 
-void exitwithstatus(int status);
+void exitwithstatus(int status, const char *reason);
 
 void *xrealloc(void *ptr, size_t size);
 
